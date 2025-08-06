@@ -87,19 +87,19 @@ jobs:
           }
         
           if (-Not (Test-Path IIS:\Sites\iisapp)) {
-            New-Website -Name "iisapp" -Port 92 -PhysicalPath "C:\inetpub\wwwroot\iisapp" -ApplicationPool "app-pool"
+            New-Website -Name "iisapp" -Port 93 -PhysicalPath "C:\inetpub\wwwroot\iisapp" -ApplicationPool "app-pool"
           } else {
             Write-Host "Site 'iisapp' already exists. Updating bindings if needed..."
-            $bindingExists = Get-WebBinding -Name "iisapp" | Where-Object { $_.bindingInformation -like "*:92:*" }
+            $bindingExists = Get-WebBinding -Name "iisapp" | Where-Object { $_.bindingInformation -like "*:93:*" }
             if (-Not $bindingExists) {
-              New-WebBinding -Name "iisapp" -Protocol "http" -Port 92 -IPAddress "*"
+              New-WebBinding -Name "iisapp" -Protocol "http" -Port 93 -IPAddress "*"
             }
             Restart-WebAppPool -Name "app-pool"
           }
         
-          # Open firewall for port 92
-          if (-Not (Get-NetFirewallRule | Where-Object { $_.DisplayName -eq "HTTP Port 92" })) {
-            New-NetFirewallRule -DisplayName "HTTP Port 92" -Direction Inbound -Protocol TCP -LocalPort 92 -Action Allow
+          # Open firewall for port 93
+          if (-Not (Get-NetFirewallRule | Where-Object { $_.DisplayName -eq "HTTP Port 93" })) {
+            New-NetFirewallRule -DisplayName "HTTP Port 93" -Direction Inbound -Protocol TCP -LocalPort 93 -Action Allow
           }
         }
         

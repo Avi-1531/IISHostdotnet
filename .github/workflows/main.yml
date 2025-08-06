@@ -1,0 +1,112 @@
+name: .NET CICD pipeline
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Install .NET SDK
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: 9.0.x
+
+    - name: Restore dependencies
+      run: dotnet restore Mwh.Sample.Web.sln
+
+    - name: Publish
+      run: dotnet publish Mwh.Sample.Web.sln --configuration Release --output ./publish
+
+    - name: Upload build artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: published-app
+        path: ./publish
+
+  deploy:
+    runs-on: windows-latest
+    needs: build
+
+    steps:
+    - name: Download published artifacts
+      uses: actions/download-artifact@v4
+      with:
+        name: published-app
+        path: ./publish
+
+    - name: Add VM to TrustedHosts
+      shell: pwsh
+      run: |
+        Set-Item WSMan:\localhost\Client\TrustedHosts -Value "${{ secrets.VM_IP }}" -Force
+
+    - name: Establish PowerShell Session using ConnectionUri
+      shell: pwsh
+      run: |
+        Set-Item -Path WSMan:\localhost\Client\AllowUnencrypted -Value $true
+        Set-Item WSMan:\localhost\Client\TrustedHosts -Value "${{ secrets.VM_IP }}" -Force
+        
+        $user = "${{ secrets.VM_USERNAME }}"
+        $pass = ConvertTo-SecureString "${{ secrets.VM_PASSWORD }}" -AsPlainText -Force
+        $cred = New-Object System.Management.Automation.PSCredential ($user, $pass)
+        $uri = "http://${{ secrets.VM_IP }}:5985/wsman"
+        
+        try {
+          $global:session = New-PSSession -ConnectionUri $uri -Credential $cred -Authentication Basic
+        
+          Invoke-Command -Session $session -ScriptBlock {
+            hostname
+            Get-Process | Sort-Object CPU -Descending | Select-Object -First 5
+          }
+        } catch {
+          Write-Error "❌ Failed to establish session or run commands: $_"
+          exit 1
+        }
+        
+        Invoke-Command -Session $session -ScriptBlock {
+          if (-Not (Test-Path "C:\inetpub\wwwroot\iisapp")) {
+            New-Item -Path "C:\inetpub\wwwroot\iisapp" -ItemType Directory
+          }
+        }
+        
+        Copy-Item -Path "./publish/*" -Destination "C:\inetpub\wwwroot\iisapp" -ToSession $session -Recurse -Force
+        
+        Invoke-Command -Session $session -ScriptBlock {
+          Import-Module WebAdministration
+        
+          if (-Not (Test-Path IIS:\AppPools\app-pool)) {
+            New-WebAppPool -Name "app-pool"
+          }
+        
+          if (-Not (Test-Path IIS:\Sites\iisapp)) {
+            New-Website -Name "iisapp" -Port 92 -PhysicalPath "C:\inetpub\wwwroot\iisapp" -ApplicationPool "app-pool"
+          } else {
+            Write-Host "Site 'iisapp' already exists. Updating bindings if needed..."
+            $bindingExists = Get-WebBinding -Name "iisapp" | Where-Object { $_.bindingInformation -like "*:92:*" }
+            if (-Not $bindingExists) {
+              New-WebBinding -Name "iisapp" -Protocol "http" -Port 92 -IPAddress "*"
+            }
+            Restart-WebAppPool -Name "app-pool"
+          }
+        
+          # Open firewall for port 92
+          if (-Not (Get-NetFirewallRule | Where-Object { $_.DisplayName -eq "HTTP Port 92" })) {
+            New-NetFirewallRule -DisplayName "HTTP Port 92" -Direction Inbound -Protocol TCP -LocalPort 92 -Action Allow
+          }
+        }
+        
+        if ($session) {
+          Remove-PSSession -Session $session
+        }
+
+
+
+    
+        
